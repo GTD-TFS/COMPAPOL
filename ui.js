@@ -1,6 +1,14 @@
 /* =============== UI (render + interacciones) =============== */
 /* Requiere: core.js (utilidades, estado, helpers) */
-/* Opcional: io.js (import/export) para los botones de importar/guardar */
+
+const {
+  state, save, saveDebounced, saveDocDebounced, escapeHtml,
+  mapIndocumentadoAny, normTipoDocLabel,
+  getTipoDocShown, isCondValid,
+  makeXLSXFromFiliacion, fileNameForFiliacion,
+  editorFocus, getDocHTML, setDocHTML, insertHTMLAtCursor,
+  includeFiliacionById, titleCaseEs, wipeAllAndRender
+} = window.Core;
 
 /* ---------- Utiles locales de UI ---------- */
 function computeTituloFicha(f){
@@ -26,7 +34,7 @@ function updateFmtButtons(){
 function renderColetillas(){
   const cont=$("#coletillasList"); if(!cont) return;
   cont.innerHTML="";
-  COLETILLAS.forEach(c=>{
+  (window.Core.COLETILLAS||[]).forEach(c=>{
     const el=document.createElement('div'); el.className="coletilla";
     el.innerHTML = `<div class="label">${c.label}</div>
                     <div><button class="btn secondary tiny">➜ Insertar</button></div>`;
@@ -57,7 +65,6 @@ function renderFiliaciones(){
   cont.innerHTML="";
   state.filiaciones.forEach((f,i)=>{
     const det=document.createElement('details'); det.className="f-item";
-    if(typeof openedIndex==='number' && openedIndex===i) det.open=true;
 
     const titulo = computeTituloFicha(f);
     const parts=[]; const tdoc=getTipoDocShown(f); if(tdoc) parts.push(tdoc); if(f.dni) parts.push(f.dni);
@@ -167,14 +174,14 @@ function renderFiliaciones(){
       const i=+e.target.dataset.i, k=e.target.dataset.k;
       const f=state.filiaciones[i];
       switch(k){
-        case "nombre":   f.nombre   = normNombre(f.nombre); break;
-        case "apellidos":f.apellidos= normApellidos(f.apellidos); break;
+        case "nombre":   f.nombre   = window.Core.normNombre(f.nombre); break;
+        case "apellidos":f.apellidos= window.Core.normApellidos(f.apellidos); break;
         case "tipoSel":  f.tipoDoc  = mapIndocumentadoAny(normTipoDocLabel(f.tipoSel, f.otroDoc)); break;
         case "otroDoc":  f.otroDoc  = titleCaseEs(f.otroDoc); f.tipoDoc = mapIndocumentadoAny(normTipoDocLabel(f.tipoSel, f.otroDoc)); break;
-        case "dni":      f.dni      = normNumDoc(f.dni); break;
-        case "padres":   f.padres   = normPadres(f.padres); break;
-        case "domicilio":f.domicilio= normDomicilio(f.domicilio); break;
-        case "lugarNac": f.lugarNac = normLugarNac(f.lugarNac); break;
+        case "dni":      f.dni      = window.Core.normNumDoc(f.dni); break;
+        case "padres":   f.padres   = window.Core.normPadres(f.padres); break;
+        case "domicilio":f.domicilio= window.Core.normDomicilio(f.domicilio); break;
+        case "lugarNac": f.lugarNac = window.Core.normLugarNac(f.lugarNac); break;
         case "condOtro": f.condOtro = titleCaseEs(f.condOtro); break;
       }
       e.target.value = f[k] || "";
@@ -194,18 +201,18 @@ function renderFiliaciones(){
 
   // Acciones
   cont.querySelectorAll('button[data-del]').forEach(b=>b.onclick=()=>{
-    const idx=+b.dataset.del; state.filiaciones.splice(idx,1); save(); openedIndex=-1; renderFiliaciones();
+    const idx=+b.dataset.del; state.filiaciones.splice(idx,1); save(); renderFiliaciones();
   });
   cont.querySelectorAll('button[data-xlsx]').forEach(b=>b.onclick=()=>{
     const idx=+b.dataset.xlsx; const f=state.filiaciones[idx];
     if(!isCondValid(f)){ alert(`Falta rellenar la condición en la filiación #${f.fixedId}.`); return; }
     const xlsx=makeXLSXFromFiliacion(f);
-    download(fileNameForFiliacion(f), xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    window.Core.download(fileNameForFiliacion(f), xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   });
   cont.querySelectorAll('button[data-json]').forEach(b=>b.onclick=()=>{
     const idx=+b.dataset.json; const f=state.filiaciones[idx];
     const pretty = JSON.stringify(f, null, 2);
-    download(`filiacion_${f.fixedId}.json`, toUTF8(pretty), "application/json");
+    window.Core.download(`filiacion_${f.fixedId}.json`, window.Core.toUTF8(pretty), "application/json");
   });
   cont.querySelectorAll('button[data-include]').forEach(b=>b.onclick=()=>{
     includeFiliacionById(+b.dataset.include);
@@ -230,7 +237,7 @@ function getTextNodeAndOffsetForRange(r){
       }
     }
     let walk = r.startContainer;
-    while(walk && walk !== editorEl()){
+    while(walk && walk !== document.getElementById('doc')){
       if(walk.previousSibling){
         walk = walk.previousSibling;
         while(walk && walk.lastChild) walk = walk.lastChild;
@@ -249,7 +256,7 @@ function handleShortcutsAtCaret(){
   const sel = window.getSelection();
   if(!sel || !sel.rangeCount) return false;
   const r = sel.getRangeAt(0);
-  if(!editorEl().contains(r.startContainer)) return false;
+  if(!document.getElementById('doc').contains(r.startContainer)) return false;
 
   const {node, offset} = getTextNodeAndOffsetForRange(r);
   if(!node) return false;
@@ -267,7 +274,7 @@ function handleShortcutsAtCaret(){
     return true;
   }
 
-  // fN / FN (sin paréntesis)
+  // fN / FN
   const m = textBefore.match(/\b[fF](\d+)$/);
   if(m){
     const id = parseInt(m[1],10);
@@ -300,7 +307,7 @@ function bindUI(){
     ed.addEventListener('input', ()=>{
       handleShortcutsAtCaret();
       state.doc=getDocHTML(); saveDocDebounced();
-      saveEditorSelection();
+      window.Core.saveEditorSelection();
       updateFmtButtons();
     });
     ed.addEventListener('keydown', (e)=>{
@@ -313,8 +320,8 @@ function bindUI(){
       }
       if(e.key === '.'){ capNext = true; }
     });
-    ed.addEventListener('mouseup', ()=>{ saveEditorSelection(); updateFmtButtons(); });
-    ed.addEventListener('keyup',   ()=>{ saveEditorSelection(); updateFmtButtons(); });
+    ed.addEventListener('mouseup', ()=>{ window.Core.saveEditorSelection(); updateFmtButtons(); });
+    ed.addEventListener('keyup',   ()=>{ window.Core.saveEditorSelection(); updateFmtButtons(); });
     ed.addEventListener('focus', ()=>{ $$('#filiaciones details[open]').forEach(d=>d.open=false); });
   }
 
@@ -332,18 +339,32 @@ function bindUI(){
   $('#titulo') && $('#titulo').addEventListener('input', ()=>{ state.titulo=$('#titulo').value; saveDocDebounced(); });
   $('#titulo') && $('#titulo').addEventListener('blur',  ()=>{ state.titulo = titleCaseEs($('#titulo').value||""); $('#titulo').value = state.titulo; saveDocDebounced(); });
 
+  // Añadir filiación (botón)
+  $('#addFBtn') && ($('#addFBtn').onclick = ()=>{
+    const f = window.Core.nuevaFiliacion();
+    state.filiaciones.push(f);
+    save();
+    renderFiliaciones();
+  });
+
   // Refrescar total
   $('#refreshTopBtn') && ($('#refreshTopBtn').onclick = ()=> wipeAllAndRender());
 }
 
-/* ---------- Exponer funciones de UI a global (si hace falta) ---------- */
-window.renderFiliaciones = renderFiliaciones;
-window.openColetillas  = openColetillas;
-window.closeColetillas = closeColetillas;
-window.updateFmtButtons = updateFmtButtons;
+/* ---------- Exponer UI para IO ---------- */
+window.UI = {
+  renderFiliaciones,
+  getDocHTML: ()=>getDocHTML(),
+  afterProjectLoaded: ()=>{
+    $('#titulo') && ($('#titulo').value = state.titulo||"");
+    setDocHTML(state.doc||"");
+    renderFiliaciones();
+  }
+};
 
 /* ---------- Init UI ---------- */
 (function uiInit(){
   renderFiliaciones();
   updateFmtButtons();
+  bindUI(); // importante
 })();
