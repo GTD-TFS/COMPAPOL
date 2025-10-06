@@ -17,7 +17,7 @@ function escapeHtml(s){ return (s??"").replace(/[&<>"']/g, m=>({'&':'&amp;','<':
 function stripHTMLExceptBIU(html){
   const tmp=document.createElement('div'); tmp.innerHTML=html||"";
   const walker=document.createTreeWalker(tmp, NodeFilter.SHOW_ELEMENT, null);
-  const allowed=new Set(['B','STRONG','I','EM','U','BR']);
+  const allowed=new Set(['B','STRONG','I','EM','U','BR','DIV','P']);
   const toRemove=[];
   while(walker.nextNode()){
     const el=walker.currentNode;
@@ -31,8 +31,8 @@ function stripHTMLExceptBIU(html){
 }
 
 /* ===== Estado ===== */
-const LS_KEY="gestor_partes_comparecencias_mobile_v1";
-const state={filiaciones:[], titulo:"", doc:""}; // doc = HTML editor
+const LS_KEY="gestor_partes_comparecencias_mobile_v2";
+const state={filiaciones:[], titulo:"", doc:"", nextId:1};
 let openedIndex = -1;
 function save(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch{} }
 function load(){ try{ Object.assign(state, JSON.parse(localStorage.getItem(LS_KEY)||"{}")); }catch{} }
@@ -73,7 +73,7 @@ const normLugarNac = s => titleCaseEs(s);
 function excelSerialToDMYString(n){
   const num = Number(n);
   if(!isFinite(num)) return "";
-  const base = new Date(Date.UTC(1899,11,30)); // Excel 1900 bug
+  const base = new Date(Date.UTC(1899,11,30));
   const ms = num * 86400000;
   const d = new Date(base.getTime()+ms);
   const dd = String(d.getUTCDate()).padStart(2,'0');
@@ -97,14 +97,17 @@ function normalizeFiliacion(f){
   f.lugarNac  = normLugarNac(f.lugarNac || "");
   f.condSel   = f.condSel || "";
   f.condOtro  = f.condOtro || "";
+  if(typeof f.fixedId !== 'number' || !isFinite(f.fixedId)){ f.fixedId = state.nextId++; }
   return f;
 }
-function nuevaFiliacion(){ return normalizeFiliacion({ 
-  nombre:"", apellidos:"", tipoSel:"", otroDoc:"", tipoDoc:"", dni:"", padres:"",
-  domicilio:"", telefono:"", fechaNac:"", lugarNac:"", condSel:"", condOtro:""
-}); }
+function nuevaFiliacion(){
+  return normalizeFiliacion({
+    nombre:"", apellidos:"", tipoSel:"", otroDoc:"", tipoDoc:"", dni:"", padres:"",
+    domicilio:"", telefono:"", fechaNac:"", lugarNac:"", condSel:"", condOtro:"", fixedId: state.nextId
+  });
+}
 
-/* ===== Coletillas (solo etiqueta visible) ===== */
+/* ===== Coletillas ===== */
 const COLETILLAS = [
   { label:"Info derechos", text:"Resulta conveniente hacer constar que se ha informado a las partes de sus derechos y obligaciones." },
   { label:"Advertencia plazo", text:"Se advierte a la persona interesada de que la falta de respuesta en el plazo conferido podrá entenderse como desistimiento." },
@@ -112,15 +115,14 @@ const COLETILLAS = [
   { label:"Notificación y recursos", text:"Notifíquese a las partes personadas, con indicación de los recursos que procedan." }
 ];
 
-/* ===== ZIP Writer (XLSX/ODT) ===== */
+/* ===== ZIP/ODT/XLSX (igual que PC) ===== */
+// (omito comentarios redundantes)
 function crc32(u8){ let c=~0>>>0; for(let i=0;i<u8.length;i++){ c=(c>>>8)^CRC_TABLE[(c^u8[i])&0xFF]; } return (~c)>>>0; }
 const CRC_TABLE=(()=>{const t=new Uint32Array(256); for(let n=0;n<256;n++){let c=n; for(let k=0;k<8;k++){ c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);} t[n]=c>>>0;} return t;})();
 function dosDateTime(d=new Date()){ const time=((d.getHours()<<11)|(d.getMinutes()<<5)|(Math.floor(d.getSeconds()/2)))&0xFFFF; const date=(((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate())&0xFFFF; return {time,date}; }
-class ZipWriter{
-  constructor(){ this.entries=[]; this.parts=[]; this.offset=0; }
-  addFile(name, data){
-    const nameBytes = toUTF8(name);
-    const content = (typeof data==="string")? toUTF8(data) : (data instanceof Uint8Array? data : new Uint8Array(data));
+class ZipWriter{ constructor(){ this.entries=[]; this.parts=[]; this.offset=0; }
+  addFile(name, data){ const nameBytes=toUTF8(name);
+    const content=(typeof data==="string")?toUTF8(data):(data instanceof Uint8Array?data:new Uint8Array(data));
     const {time,date}=dosDateTime(); const crc=crc32(content);
     const local=new Uint8Array(30+nameBytes.length); const v=new DataView(local.buffer);
     v.setUint32(0,0x04034b50,true); v.setUint16(4,20,true); v.setUint16(6,0,true); v.setUint16(8,0,true);
@@ -129,63 +131,48 @@ class ZipWriter{
     v.setUint16(26,nameBytes.length,true); v.setUint16(28,0,true);
     local.set(nameBytes,30);
     const offsetHere=this.offset; this.parts.push(local,content); this.offset+=local.length+content.length;
-    this.entries.push({nameBytes, crc, size:content.length, time, date, offset:offsetHere});
-  }
-  finalize(){
-    const centralParts=[]; let centralSize=0;
-    for(const e of this.entries){
-      const c=new Uint8Array(46+e.nameBytes.length); const v=new DataView(c.buffer);
+    this.entries.push({nameBytes, crc, size:content.length, time, date, offset:offsetHere}); }
+  finalize(){ const centralParts=[]; let centralSize=0;
+    for(const e of this.entries){ const c=new Uint8Array(46+e.nameBytes.length); const v=new DataView(c.buffer);
       v.setUint32(0,0x02014b50,true); v.setUint16(4,20,true); v.setUint16(6,20,true);
       v.setUint16(8,0,true); v.setUint16(10,0,true); v.setUint16(12,e.time,true); v.setUint16(14,e.date,true);
       v.setUint32(16,e.crc,true); v.setUint32(20,e.size,true); v.setUint32(24,e.size,true);
       v.setUint16(28,e.nameBytes.length,true); v.setUint16(30,0,true); v.setUint16(32,0,true);
       v.setUint16(34,0,true); v.setUint16(36,0,true); v.setUint32(38,0,true); v.setUint32(42,e.offset,true);
-      c.set(e.nameBytes,46); centralParts.push(c); centralSize+=c.length;
-    }
+      c.set(e.nameBytes,46); centralParts.push(c); centralSize+=c.length; }
     const centralOffset=this.offset; this.parts.push(...centralParts); this.offset+=centralSize;
     const end=new Uint8Array(22); const ve=new DataView(end.buffer);
     ve.setUint32(0,0x06054b50,true); ve.setUint16(4,0,true); ve.setUint16(6,0,true);
     ve.setUint16(8,this.entries.length,true); ve.setUint16(10,this.entries.length,true);
     ve.setUint32(12,centralSize,true); ve.setUint32(16,centralOffset,true); ve.setUint16(20,0,true);
-    this.parts.push(end);
-    let total=0; for(const p of this.parts) total+=p.length;
-    const out=new Uint8Array(total); let off=0; for(const p of this.parts){ out.set(p,off); off+=p.length; }
-    return out;
-  }
-}
-
-/* ===== ODT (preserva B/I/U) ===== */
+    this.parts.push(end); let total=0; for(const p of this.parts) total+=p.length;
+    const out=new Uint8Array(total); let off=0; for(const p of this.parts){ out.set(p,off); off+=p.length; } return out; } }
 function htmlToODTParagraphs(html){
   const tmp=document.createElement('div'); tmp.innerHTML = stripHTMLExceptBIU(html||"");
-  const out=[];
-  function nodeToText(node){
+  const out=[]; function nodeToText(node){
     if(node.nodeType===Node.TEXT_NODE) return escapeXml(node.nodeValue||"");
     if(node.nodeType!==Node.ELEMENT_NODE) return "";
-    const tag=node.tagName;
-    if(tag==="BR") return "<text:line-break/>";
+    const tag=node.tagName; if(tag==="BR") return "<text:line-break/>";
     const inner=Array.from(node.childNodes).map(nodeToText).join("");
-    if(tag==="B" || tag==="STRONG") return `<text:span text:style-name="B">${inner}</text:span>`;
-    if(tag==="I" || tag==="EM")     return `<text:span text:style-name="I">${inner}</text:span>`;
-    if(tag==="U")                   return `<text:span text:style-name="U">${inner}</text:span>`;
-    return inner;
-  }
-  const blocks = Array.from(tmp.childNodes);
+    if(tag==="B"||tag==="STRONG") return `<text:span text:style-name="B">${inner}</text:span>`;
+    if(tag==="I"||tag==="EM") return `<text:span text:style-name="I">${inner}</text:span>`;
+    if(tag==="U") return `<text:span text:style-name="U">${inner}</text:span>`;
+    return inner; }
+  const blocks=Array.from(tmp.childNodes);
   if(!blocks.length){ out.push("<text:p/>"); return out.join(""); }
   for(const n of blocks){
-    if(n.nodeType===Node.ELEMENT_NODE && (n.tagName==="DIV" || n.tagName==="P")){
+    if(n.nodeType===Node.ELEMENT_NODE&&(n.tagName==="DIV"||n.tagName==="P")){
       const inner=Array.from(n.childNodes).map(nodeToText).join("");
       out.push(`<text:p>${inner}</text:p>`);
-    }else if(n.nodeType===Node.ELEMENT_NODE && n.tagName==="BR"){
+    }else if(n.nodeType===Node.ELEMENT_NODE&&n.tagName==="BR"){
       out.push("<text:p/>");
     }else{
-      const t=nodeToText(n);
-      if(t) out.push(`<text:p>${t}</text:p>`);
-    }
+      const t=nodeToText(n); if(t) out.push(`<text:p>${t}</text:p>`); }
   }
   return out.join("");
 }
 function makeODTFromHTML(title, html){
-  const paras = htmlToODTParagraphs(html);
+  const paras=htmlToODTParagraphs(html);
   const content =
 `<?xml version="1.0" encoding="UTF-8"?>
 <office:document-content
@@ -216,16 +203,8 @@ function makeODTFromHTML(title, html){
   z.addFile("META-INF/manifest.xml", manifest);
   return z.finalize();
 }
-
-/* ===== XLSX (plantilla “Resumen” + Condición al final) ===== */
-const XLSX_LABELS = [
-  "Nombre","Apellidos","Tipo de documento","Nº Documento","Sexo","Nacionalidad","Nombre de los Padres",
-  "Fecha de nacimiento","Lugar de nacimiento","Domicilio","Teléfono","Delito","C.P. Agentes","Diligencias",
-  "Instructor","Lugar del hecho","Lugar de la detención","Hora del hecho","Hora de la detención",
-  "Breve resumen de los hechos","Indicios por los que se detiene","Abogado","Comunicarse con","Informar de detención",
-  "Intérprete","Médico","Consulado","Indicativo","Fecha de generación","Condición"
-];
-function valueForLabel(f, label){
+const XLSX_LABELS=["Nombre","Apellidos","Tipo de documento","Nº Documento","Sexo","Nacionalidad","Nombre de los Padres","Fecha de nacimiento","Lugar de nacimiento","Domicilio","Teléfono","Delito","C.P. Agentes","Diligencias","Instructor","Lugar del hecho","Lugar de la detención","Hora del hecho","Hora de la detención","Breve resumen de los hechos","Indicios por los que se detiene","Abogado","Comunicarse con","Informar de detención","Intérprete","Médico","Consulado","Indicativo","Fecha de generación","Condición"];
+function valueForLabel(f,label){
   switch(label){
     case "Nombre": return f.nombre||"";
     case "Apellidos": return f.apellidos||"";
@@ -254,58 +233,12 @@ function sheetXMLForFiliacion(f){
   <sheetData>${rows}</sheetData>
 </worksheet>`;
 }
-function workbookXML(){
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheets><sheet name="Resumen" sheetId="1" r:id="rId1"/></sheets>
-</workbook>`;
-}
-function workbookRelsXML(){
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-</Relationships>`;
-}
-function rootRelsXML(){
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
-  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
-</Relationships>`;
-}
-function contentTypesXML(){
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
-  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-</Types>`;
-}
-function corePropsXML(){
-  const now = new Date().toISOString();
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
- xmlns:dc="http://purl.org/dc/elements/1.1/"
- xmlns:dcterms="http://purl.org/dc/terms/"
- xmlns:dcmitype="http://purl.org/dc/dcmitype/"
- xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:creator>Editor Filiaciones</dc:creator>
-  <cp:lastModifiedBy>Editor Filiaciones</cp:lastModifiedBy>
-  <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
-  <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
-</cp:coreProperties>`;
-}
-function appPropsXML(){
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
- xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>Microsoft Excel</Application>
-</Properties>`;
-}
+function workbookXML(){ return `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Resumen" sheetId="1" r:id="rId1"/></sheets></workbook>`; }
+function workbookRelsXML(){ return `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`; }
+function rootRelsXML(){ return `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`; }
+function contentTypesXML(){ return `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`; }
+function corePropsXML(){ const now=new Date().toISOString(); return `<?xml version="1.0" encoding="UTF-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>Editor Filiaciones (Móvil)</dc:creator><cp:lastModifiedBy>Editor Filiaciones (Móvil)</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`; }
+function appPropsXML(){ return `<?xml version="1.0" encoding="UTF-8"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Microsoft Excel</Application></Properties>`; }
 function makeXLSXFromFiliacion(f){
   const z=new ZipWriter();
   z.addFile("[Content_Types].xml", contentTypesXML());
@@ -327,157 +260,145 @@ function fileBaseFromTitle(){
   const safe = base.normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w\- ]+/g,"").replace(/\s+/g,"_");
   return safe.length>50 ? safe.slice(0,50) : safe;
 }
-function fileNameForFiliacion(f, idx){
+function fileNameForFiliacion(f){
   const nombre=(f.nombre||"").trim();
   const ap1=(f.apellidos||"").trim().split(/\s+/)[0]||"";
   let base=[nombre, ap1].filter(Boolean).join(" ").trim();
-  if(!base) base=`filiacion_${idx+1}`;
+  if(!base) base=`filiacion_${f.fixedId}`;
   base=base.replace(/[\\/:*?"<>|]/g,"_");
   return `${base}.xlsx`;
 }
 
-/* ===== Importar XLSX ===== */
-class ZipReader{
-  constructor(u8){ this.u8=u8; this.dv=new DataView(u8.buffer); }
-  async readText(path){ const data=await this.readFile(path); return fromUTF8(data); }
-  async exists(path){ try{ await this.readFile(path); return true; }catch{ return false; } }
-  async readFile(path){
-    const eocd=this.findEOCD(); if(!eocd) throw new Error("EOCD no encontrado");
-    const cdOff=eocd.cdOffset, cdSize=eocd.cdSize; const cdEnd=cdOff+cdSize;
-    let p=cdOff;
-    while(p<cdEnd){
-      const sig=this.dv.getUint32(p,true); if(sig!==0x02014b50) break;
-      const compMethod=this.dv.getUint16(p+10,true);
-      const csize=this.dv.getUint32(p+20,true);
-      const nameLen=this.dv.getUint16(p+28,true);
-      const extraLen=this.dv.getUint16(p+30,true);
-      const commLen=this.dv.getUint16(p+32,true);
-      const lhoff=this.dv.getUint32(p+42,true);
-      const name=fromUTF8(this.u8.slice(p+46,p+46+nameLen));
-      const next=p+46+nameLen+extraLen+commLen;
-      if(name===path){
-        const sig2=this.dv.getUint32(lhoff,true); if(sig2!==0x04034b50) throw new Error("Local header inválido");
-        const nlen=this.dv.getUint16(lhoff+26,true);
-        const xlen=this.dv.getUint16(lhoff+28,true);
-        const dataStart=lhoff+30+nlen+xlen;
-        const comp=this.u8.slice(dataStart,dataStart+csize);
-        if(compMethod===0){ return comp; }
-        if(compMethod===8){
-          if(typeof DecompressionStream==="undefined") throw new Error("Navegador sin 'DecompressionStream' (deflate). Usa Chrome/Edge actual.");
-          const ds=new DecompressionStream('deflate-raw');
-          const ab=await new Response(new Blob([comp]).stream().pipeThrough(ds)).arrayBuffer();
-          return new Uint8Array(ab);
-        }
-        throw new Error("Compresión no soportada: "+compMethod);
-      }
-      p=next;
-    }
-    throw new Error("Archivo no encontrado en ZIP: "+path);
-  }
-  findEOCD(){
-    const u8=this.u8; const start=Math.max(0,u8.length-0xFFFF);
-    for(let i=u8.length-22;i>=start;i--){
-      if(this.dv.getUint32(i,true)===0x06054b50){
-        const cdSize=this.dv.getUint32(i+12,true);
-        const cdOffset=this.dv.getUint32(i+16,true);
-        return {cdSize,cdOffset,offset:i};
-      }
-    }
-    return null;
-  }
+/* ===== Editor y selección ===== */
+function editorEl(){ return $('#doc'); }
+function editorFocus(){ editorEl().focus(); }
+function getDocHTML(){ return editorEl().innerHTML; }
+function setDocHTML(html){ editorEl().innerHTML = html||""; }
+
+let savedRange = null;
+function saveEditorSelection(){
+  const sel = window.getSelection?.();
+  const ed = editorEl();
+  if(!sel || sel.rangeCount===0) return;
+  const r = sel.getRangeAt(0);
+  if(!ed.contains(r.startContainer) || !ed.contains(r.endContainer)) return;
+  savedRange = r.cloneRange();
 }
-async function importXlsxFiles(fileList){
-  let lastIdx = -1;
-  for(const file of fileList){
-    try{
-      const buf=new Uint8Array(await file.arrayBuffer());
-      const zip=new ZipReader(buf);
-      const wbXml=await zip.readText("xl/workbook.xml");
-      const wb=new DOMParser().parseFromString(wbXml,"application/xml");
-      const sheets=Array.from(wb.getElementsByTagName("sheet"));
-      const resumen=sheets.find(s=>(s.getAttribute("name")||"").toLowerCase()==="resumen");
-      if(!resumen) throw new Error("Hoja 'Resumen' no encontrada.");
-      const rid=resumen.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships","id")||resumen.getAttribute("r:id");
-      const relsXml=await zip.readText("xl/_rels/workbook.xml.rels");
-      const rel=Array.from(new DOMParser().parseFromString(relsXml,"application/xml").getElementsByTagName("Relationship")).find(r=>r.getAttribute("Id")===rid);
-      let target=rel?.getAttribute("Target")||"worksheets/sheet1.xml";
-      if(!target.startsWith("worksheets/")) target="worksheets/sheet1.xml";
-      const sheetXml=await zip.readText("xl/"+target);
-      let shared=[];
-      if(await zip.exists("xl/sharedStrings.xml")){
-        const sXml=await zip.readText("xl/sharedStrings.xml");
-        const sDoc=new DOMParser().parseFromString(sXml,"application/xml");
-        shared=Array.from(sDoc.getElementsByTagName("si")).map(si=>Array.from(si.getElementsByTagName("t")).map(t=>t.textContent||"").join(""));
-      }
-      const ws=new DOMParser().parseFromString(sheetXml,"application/xml");
-      const cells=Array.from(ws.getElementsByTagName("c"));
-      const byRow={};
-      function readCell(c){
-        const t=c.getAttribute("t"); const v=c.getElementsByTagName("v")[0];
-        if(t==="s"){ const idx=v?parseInt(v.textContent||"0",10):0; return shared[idx]??""; }
-        if(t==="inlineStr"){ const is=c.getElementsByTagName("is")[0]; const tnode=is?.getElementsByTagName("t")[0]; return tnode?tnode.textContent||"" : ""; }
-        const val = v? v.textContent||"" :"";
-        if(/^\d+(\.\d+)?$/.test(val)){
-          const asDate = excelSerialToDMYString(val);
-          return asDate || val;
-        }
-        return val;
-      }
-      cells.forEach(c=>{
-        const ref=c.getAttribute("r")||""; const m=ref.match(/^([A-Z]+)(\d+)$/); if(!m) return;
-        const col=m[1]; const row=parseInt(m[2],10); const val=readCell(c);
-        byRow[row]=byRow[row]||{}; if(col==="A") byRow[row].A=val; else if(col==="B") byRow[row].B=val;
-      });
-      const map={}; Object.values(byRow).forEach(r=>{ if(r?.A) map[r.A.trim()]=(r.B||"").trim(); });
+document.addEventListener('selectionchange', saveEditorSelection);
 
-      let tipoRaw = map["Tipo de documento"] || "";
-      tipoRaw = mapIndocumentadoAny(tipoRaw);
-      const tipoSel = (["DNI","NIE","PASAPORTE"].includes((tipoRaw||"").toUpperCase())) ? (tipoRaw.toUpperCase()==="PASAPORTE"?"Pasaporte":tipoRaw.toUpperCase())
-                    : (tipoRaw==="Indocumentado/a" ? "Indocumentado/a" : (tipoRaw ? "Otro" : ""));
+function insertHTMLAtCursor(html){
+  const ed = editorEl();
+  ed.focus();
 
-      const f = normalizeFiliacion({
-        nombre    : map["Nombre"] || "",
-        apellidos : map["Apellidos"] || "",
-        tipoSel   : tipoSel,
-        otroDoc   : (tipoSel==="Otro") ? tipoRaw : "",
-        tipoDoc   : "",
-        dni       : map["Nº Documento"] || "",
-        fechaNac  : map["Fecha de nacimiento"] || "",
-        lugarNac  : map["Lugar de nacimiento"] || "",
-        padres    : map["Nombre de los Padres"] || "",
-        domicilio : map["Domicilio"] || "",
-        telefono  : map["Teléfono"] || "",
-        condSel   : "", condOtro: ""
-      });
+  const sel = window.getSelection();
+  let range = null;
 
-      state.filiaciones.push(f); lastIdx = state.filiaciones.length-1;
-    }catch(err){ alert(`No se pudo importar “${file.name}”: ${err.message}`); }
+  if(savedRange){
+    sel.removeAllRanges();
+    sel.addRange(savedRange);
+    range = savedRange.cloneRange();
+  }else if(sel && sel.rangeCount>0 && ed.contains(sel.getRangeAt(0).startContainer)){
+    range = sel.getRangeAt(0).cloneRange();
+  }else{
+    range = document.createRange();
+    range.selectNodeContents(ed);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
   }
-  if(lastIdx>=0){ save(); openedIndex = lastIdx; renderFiliaciones(); }
+
+  const temp = document.createElement('div');
+  temp.innerHTML = html;
+  const frag = document.createDocumentFragment();
+  let lastNode = null;
+  while (temp.firstChild){
+    lastNode = frag.appendChild(temp.firstChild);
+  }
+
+  range.deleteContents();
+  range.insertNode(frag);
+
+  if(lastNode){
+    range.setStartAfter(lastNode);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    savedRange = range.cloneRange();
+  }
+
+  state.doc = getDocHTML();
+  saveDocDebounced();
 }
 
-/* ===== UI Filiaciones ===== */
+/* ===== Lógica de filiaciones ===== */
 function getTipoDocShown(f){
   return f.tipoSel==="Otro" ? (f.otroDoc?f.otroDoc:f.tipoDoc) : f.tipoSel || f.tipoDoc || "";
 }
 function isCondValid(f){ return f.condSel && (f.condSel!=="Otro" || (f.condOtro && f.condOtro.trim()!=="")); }
-function computeTituloFicha(f,i){
-  const titulo=(f.nombre||f.apellidos) ? `${(f.nombre||'').trim()} ${(f.apellidos||'').trim().split(/\s+/)[0]||''}`.trim() : `Filiación ${i+1}`;
-  const tdoc=getTipoDocShown(f);
-  const parts=[]; if(tdoc) parts.push(tdoc); if(f.dni) parts.push(f.dni);
-  return {titulo:titulo||`Filiación ${i+1}`, subtitulo:parts.length?`(${parts.join(' · ')})`:""};
+function computeTituloFicha(f){
+  const titulo=(f.nombre||f.apellidos) ? `${(f.nombre||'').trim()} ${(f.apellidos||'').trim().split(/\s+/)[0]||''}`.trim() : `Filiación`;
+  return titulo || 'Filiación';
 }
+function buildColetillaFromFiliacion(f){
+  const segs=[];
+  const nom=[f.nombre,f.apellidos].filter(Boolean).join(' ').trim(); if(nom) segs.push(nom);
+
+  const tdoc = getTipoDocShown(f);
+  const isIndoc = /^Indocumentad[oa]\/?a?$/.test(tdoc||"") || (tdoc==="Indocumentado/a");
+  if(isIndoc){ segs.push("Indocumentado/a"); }
+  else{
+    if(tdoc && f.dni){ segs.push(`con ${tdoc} número ${f.dni}`); }
+    else if(tdoc){ segs.push(`con ${tdoc}`); }
+    else if(f.dni){ segs.push(`con número ${f.dni}`); }
+  }
+
+  if(f.lugarNac || f.fechaNac){
+    let born = "nacido/a";
+    if(f.lugarNac) born += ` en ${f.lugarNac}`;
+    if(f.fechaNac) born += ` el día ${f.fechaNac}`;
+    segs.push(born);
+  }
+
+  if(f.padres){ segs.push(`hijo/a de ${f.padres}`); }
+  if(f.domicilio){ segs.push(`con domicilio en ${f.domicilio}`); }
+  if(f.telefono){ segs.push(`teléfono ${f.telefono}`); }
+
+  return segs.join(", ");
+}
+function includeFiliacionById(fid){
+  const f = state.filiaciones.find(ff=>ff.fixedId===fid);
+  if(!f){ alert(`No existe la filiación #${fid}.`); return; }
+  if(!isCondValid(f)){
+    alert(`Falta rellenar la condición en la filiación #${fid}.`);
+    return;
+  }
+  const txt = buildColetillaFromFiliacion(f);
+  insertHTMLAtCursor(`<b>${escapeHtml(txt)}</b>`);
+  editorFocus();
+}
+
+/* ===== UI Filiaciones ===== */
 function renderFiliaciones(){
   const cont=$("#filiaciones"); cont.innerHTML="";
   state.filiaciones.forEach((f,i)=>{
     const det=document.createElement('details'); det.className="f-item"; if(openedIndex===i) det.open=true;
-    const info=computeTituloFicha(f,i);
+
+    const titulo = computeTituloFicha(f);
+    const docmetaParts=[];
+    const tdoc=getTipoDocShown(f);
+    if(tdoc) docmetaParts.push(tdoc);
+    if(f.dni) docmetaParts.push(f.dni);
+    const docmeta = docmetaParts.join(' · ');
+
     det.innerHTML=`
       <summary>
-        <span class="tag">#${String(i+1).padStart(2,'0')}</span>
-        <span class="title">${info.titulo}</span>
-        ${info.subtitulo?`<span class="sub">${info.subtitulo}</span>`:""}
-        <span class="caret"></span>
+        <span class="tag">#${String(f.fixedId).padStart(2,'0')}</span>
+        <span class="title">${escapeHtml(titulo)}</span>
+        <span class="summary-right">
+          ${docmeta?`<span class="docmeta">${escapeHtml(docmeta)}</span>`:""}
+          <button class="btn success tiny" data-include="${f.fixedId}" title="Incluir al texto">Incluir al texto</button>
+          <span class="caret"></span>
+        </span>
       </summary>
       <div class="details-body">
         <div class="row">
@@ -521,7 +442,6 @@ function renderFiliaciones(){
         <div class="btn-row" style="margin-top:8px">
           <button class="btn ghost tiny" data-up="${i}" title="Subir">↑</button>
           <button class="btn ghost tiny" data-down="${i}" title="Bajar">↓</button>
-          <button class="btn secondary tiny" data-add="${i}" title="Añadir al documento" ${!isCondValid(f)?'disabled':''}>➜ Añadir</button>
           <button class="btn secondary tiny" data-xlsx="${i}" title="Descargar XLSX" ${!isCondValid(f)?'disabled':''}>⬇️ XLSX</button>
           <button class="btn danger tiny" data-del="${i}" title="Eliminar">🗑️</button>
         </div>
@@ -530,7 +450,7 @@ function renderFiliaciones(){
   });
   $('#emptyHint').style.display = state.filiaciones.length ? 'none':'block';
 
-  // inputs/selects (edición + normalización)
+  // inputs/selects
   cont.querySelectorAll('input[data-k], select[data-k]').forEach(inp=>{
     const handlerInput = e=>{
       const i=+e.target.dataset.i, k=e.target.dataset.k;
@@ -544,30 +464,28 @@ function renderFiliaciones(){
       state.filiaciones[i][k]=e.target.value;
       if(k==="tipoSel"){
         const det=e.target.closest('details');
-        const otherCol = det.querySelector('input[data-k="otroDoc"]')?.closest('.col');
-        if(otherCol){ otherCol.style.display = e.target.value==="Otro" ? "" : "none"; }
+        const oCol = det.querySelector('input[data-k="otroDoc"]')?.closest('.col');
+        if(oCol){ oCol.style.display = e.target.value==="Otro" ? "" : "none"; }
       }
       if(k==="condSel"){
         const det=e.target.closest('details');
-        const otherCol = det.querySelector('input[data-k="condOtro"]')?.closest('.col');
-        if(otherCol){ otherCol.style.display = e.target.value==="Otro" ? "" : "none"; }
+        const oCol = det.querySelector('input[data-k="condOtro"]')?.closest('.col');
+        if(oCol){ oCol.style.display = e.target.value==="Otro" ? "" : "none"; }
       }
       saveDebounced();
+
       if(["nombre","apellidos","tipoSel","otroDoc","dni"].includes(k)){
         const f=state.filiaciones[i];
         if(f.tipoSel==="Indocumentado" || f.tipoSel==="Indocumentada") f.tipoSel="Indocumentado/a";
         f.tipoDoc = mapIndocumentadoAny(normTipoDocLabel(f.tipoSel, f.otroDoc));
         const det=e.target.closest('details'); if(det){
-          const info=computeTituloFicha(f, i);
-          const tEl=det.querySelector('.title'); const sEl=det.querySelector('.sub');
-          if(tEl) tEl.textContent=info.titulo;
-          if(info.subtitulo){ if(sEl) sEl.textContent=info.subtitulo; else det.querySelector('summary').insertAdjacentHTML('beforeend', `<span class="sub">${info.subtitulo}</span>`); }
-          else if(sEl){ sEl.remove(); }
+          const tEl=det.querySelector('.title');
+          const titulo=computeTituloFicha(f);
+          if(tEl) tEl.textContent=titulo;
+          const meta=det.querySelector('.docmeta');
+          const parts=[]; const tdoc=getTipoDocShown(f); if(tdoc) parts.push(tdoc); if(f.dni) parts.push(f.dni);
+          if(meta){ meta.textContent = parts.join(' · '); }
         }
-      }
-      if(k==="condSel" || k==="condOtro"){
-        const f=state.filiaciones[i]; const valid=isCondValid(f);
-        const det=e.target.closest('details'); det.querySelector('[data-add]').disabled=!valid; det.querySelector('[data-xlsx]').disabled=!valid;
       }
     };
     const handlerBlur = e=>{
@@ -588,11 +506,12 @@ function renderFiliaciones(){
       save();
       if(["nombre","apellidos","tipoSel","otroDoc","dni"].includes(k)){
         const det=e.target.closest('details'); if(det){
-          const info=computeTituloFicha(f, i);
-          det.querySelector('.title').textContent=info.titulo;
-          const sEl=det.querySelector('.sub');
-          if(info.subtitulo){ if(sEl) sEl.textContent=info.subtitulo; else det.querySelector('summary').insertAdjacentHTML('beforeend', `<span class="sub">${info.subtitulo}</span>`); }
-          else if(sEl){ sEl.remove(); }
+          const tEl=det.querySelector('.title');
+          const titulo=computeTituloFicha(f);
+          if(tEl) tEl.textContent=titulo;
+          const meta=det.querySelector('.docmeta');
+          const parts=[]; const tdoc=getTipoDocShown(f); if(tdoc) parts.push(tdoc); if(f.dni) parts.push(f.dni);
+          if(meta){ meta.textContent = parts.join(' · '); }
         }
       }
     };
@@ -604,55 +523,35 @@ function renderFiliaciones(){
   cont.querySelectorAll('button[data-del]').forEach(b=>b.onclick=()=>{ const idx=+b.dataset.del; state.filiaciones.splice(idx,1); save(); openedIndex=-1; renderFiliaciones(); });
   cont.querySelectorAll('button[data-up]').forEach(b=>b.onclick=()=>{ const i=+b.dataset.up; if(i<=0)return; [state.filiaciones[i-1],state.filiaciones[i]]=[state.filiaciones[i],state.filiaciones[i-1]]; save(); openedIndex=i-1; renderFiliaciones();});
   cont.querySelectorAll('button[data-down]').forEach(b=>b.onclick=()=>{ const i=+b.dataset.down; if(i>=state.filiaciones.length-1)return; [state.filiaciones[i+1],state.filiaciones[i]]=[state.filiaciones[i],state.filiaciones[i+1]]; save(); openedIndex=i+1; renderFiliaciones();});
-  cont.querySelectorAll('button[data-add]').forEach(b=>b.onclick=()=>{ 
-    const f=state.filiaciones[+b.dataset.add]; 
-    const txt = buildColetillaFromFiliacion(f);
-    editorFocus();
-    document.execCommand('insertHTML', false, `<b>${escapeHtml(txt)}</b>`); // en negrita, sin punto/salto
-    state.doc = $('#doc').innerHTML; saveDocDebounced();
-    $('#doc').focus();
+  cont.querySelectorAll('button[data-include]').forEach(b=>b.onclick=()=>{ includeFiliacionById(+b.dataset.include); });
+  cont.querySelectorAll('button[data-xlsx]').forEach(b=>b.onclick=()=>{ const idx=+b.dataset.xlsx; const f=state.filiaciones[idx]; const xlsx=makeXLSXFromFiliacion(f); download(fileNameForFiliacion(f), xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); });
+}
+
+/* ===== Coletillas (modal) ===== */
+function renderColetillas(){
+  const cont=$("#coletillasList"); cont.innerHTML="";
+  COLETILLAS.forEach(c=>{
+    const el=document.createElement('div'); el.className="coletilla";
+    el.innerHTML = `<div class="label">${c.label}</div>
+                    <div><button class="btn secondary tiny">➜ Insertar</button></div>`;
+    el.querySelector('button').onclick=()=>{
+      insertHTMLAtCursor(escapeHtml(c.text));
+      closeColetillas();
+      editorFocus();
+    };
+    cont.appendChild(el);
   });
-  cont.querySelectorAll('button[data-xlsx]').forEach(b=>b.onclick=()=>{ const idx=+b.dataset.xlsx; const f=state.filiaciones[idx]; const xlsx=makeXLSXFromFiliacion(f); download(fileNameForFiliacion(f, idx), xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); });
 }
-
-/* ===== Coletilla por ficha (orden y reglas) ===== */
-function buildColetillaFromFiliacion(f){
-  const segs=[];
-  const nom=[f.nombre,f.apellidos].filter(Boolean).join(' ').trim(); if(nom) segs.push(nom);
-
-  const tdoc = getTipoDocShown(f);
-  const isIndoc = /^Indocumentad[oa]\/?a?$/.test(tdoc||"") || (tdoc==="Indocumentado/a");
-  if(isIndoc){ segs.push("Indocumentado/a"); }
-  else{
-    if(tdoc && f.dni){ segs.push(`con ${tdoc} número ${f.dni}`); }
-    else if(tdoc){ segs.push(`con ${tdoc}`); }
-    else if(f.dni){ segs.push(`con número ${f.dni}`); }
-  }
-
-  if(f.lugarNac || f.fechaNac){
-    let born = "nacido/a";
-    if(f.lugarNac) born += ` en ${f.lugarNac}`;
-    if(f.fechaNac) born += ` el día ${f.fechaNac}`; // sin coma
-    segs.push(born);
-  }
-
-  if(f.padres){ segs.push(`hijo/a de ${f.padres}`); }
-  if(f.domicilio){ segs.push(`con domicilio en ${f.domicilio}`); }
-  if(f.telefono){ segs.push(`teléfono ${f.telefono}`); }
-
-  return segs.join(", ");
-}
+function openColetillas(){ $('#coletillasModal').classList.add('show'); $('#coletillasModal').setAttribute('aria-hidden','false'); renderColetillas(); }
+function closeColetillas(){ $('#coletillasModal').classList.remove('show'); $('#coletillasModal').setAttribute('aria-hidden','true'); }
 
 /* ===== Documento & proyecto ===== */
-function editorEl(){ return $('#doc'); }
-function editorFocus(){ editorEl().focus(); }
-function getDocHTML(){ return editorEl().innerHTML; }
-function setDocHTML(html){ editorEl().innerHTML = html||""; }
 function exportODT(){
   const base=fileBaseFromTitle(); const title=state.titulo||"Documento";
   const html = getDocHTML(); const odt=makeODTFromHTML(title, html);
   download(`${base}.odt`, odt, "application/vnd.oasis.opendocument.text");
 }
+
 $('#printBtn').onclick=()=>window.print();
 $('#saveProjectBtn').onclick=()=>{ const base=fileBaseFromTitle(); const json=toUTF8(JSON.stringify({...state, doc:getDocHTML()}, null, 2)); download(`${base}.json`, json, "application/json"); };
 $('#loadProjectBtn').onclick=()=>$('#loadProjectInput').click();
@@ -661,19 +560,53 @@ $('#loadProjectInput').addEventListener('change', async (e)=>{
   try{
     const data=JSON.parse(await file.text());
     if(!data || !Array.isArray(data.filiaciones)) throw new Error("Formato inválido");
+    if(typeof data.nextId !== 'number' || !isFinite(data.nextId)){
+      const maxId = Math.max(0, ...data.filiaciones.map(ff=>ff.fixedId||0));
+      data.nextId = maxId + 1;
+    }
     state.filiaciones=data.filiaciones.map(ff=>normalizeFiliacion(Object.assign({tipoSel:"", otroDoc:"", condSel:"", condOtro:""}, ff)));
-    state.titulo=data.titulo||""; state.doc=data.doc||"";
+    state.titulo=data.titulo||""; state.doc=data.doc||""; state.nextId = data.nextId||state.nextId;
     $('#titulo').value=state.titulo; setDocHTML(state.doc);
     save(); openedIndex = state.filiaciones.length? state.filiaciones.length-1 : -1; renderFiliaciones();
     alert("Proyecto cargado correctamente.");
   }catch(err){ alert("No se pudo cargar el proyecto: " + err.message); }
   finally{ e.target.value=""; }
 });
+
 $('#titulo').addEventListener('blur', ()=>{ state.titulo = titleCaseEs($('#titulo').value||""); $('#titulo').value = state.titulo; saveDocDebounced(); });
 $('#titulo').addEventListener('input', ()=>{ state.titulo=$('#titulo').value; saveDocDebounced(); }, {passive:true});
 
-/* Mayúscula tras punto y tras “-- ” (con fallback para móviles) */
+/* Mayúscula tras punto y atajos fN/FN y ccc */
 let capNext = false;
+function handleShortcutsOnTextNode(textNode, caretOffset){
+  if(!textNode || textNode.nodeType!==Node.TEXT_NODE) return false;
+  const before = textNode.data.slice(0, caretOffset);
+
+  // ccc / CCC -> Coletillas
+  const mC = before.match(/ccc$/i);
+  if(mC){
+    const r = document.createRange();
+    r.setStart(textNode, caretOffset-3);
+    r.setEnd(textNode, caretOffset);
+    r.deleteContents();
+    openColetillas();
+    return true;
+  }
+
+  // fN / FN (sin paréntesis)
+  const m = before.match(/\b[fF](\d+)$/);
+  if(m){
+    const id = parseInt(m[1],10);
+    const r = document.createRange();
+    r.setStart(textNode, caretOffset - m[0].length);
+    r.setEnd(textNode, caretOffset);
+    r.deleteContents();
+    includeFiliacionById(id);
+    return true;
+  }
+  return false;
+}
+
 $('#doc').addEventListener('beforeinput', (e)=>{
   if(e.inputType==='insertText' && e.data === '.') capNext = true;
   if(e.inputType==='insertText' && capNext && typeof e.data === 'string' && e.data.length===1){
@@ -685,48 +618,56 @@ $('#doc').addEventListener('beforeinput', (e)=>{
     }
   }
 });
+
 $('#doc').addEventListener('input', (e)=>{
-  // Fallback: si el evento input trae el punto como último carácter
   if(e.inputType==='insertText' && e.data === '.') capNext = true;
+
+  const sel = window.getSelection();
+  if(sel && sel.rangeCount){
+    const r = sel.getRangeAt(0);
+    const node = r.startContainer;
+    const offset = r.startOffset;
+    handleShortcutsOnTextNode(node, offset);
+  }
+
   state.doc=getDocHTML(); saveDocDebounced();
+  saveEditorSelection();
 });
+
 $('#doc').addEventListener('keydown', (e)=>{
   if(e.key === 'Enter'){
     e.preventDefault();
-    document.execCommand('insertHTML', false, '<br>-- &nbsp;');
+    insertHTMLAtCursor('<br>-- &nbsp;');
     capNext = true;
     state.doc=getDocHTML(); saveDocDebounced();
     return;
   }
   if(e.key === '.'){ capNext = true; }
 });
+
+$('#doc').addEventListener('mouseup', saveEditorSelection);
+$('#doc').addEventListener('keyup', saveEditorSelection);
 $('#doc').addEventListener('focus', ()=>{ $$('#filiaciones details[open]').forEach(d=>d.open=false); });
 
-// Formato B/I/U
 function cmd(name){ editorFocus(); document.execCommand(name, false, null); state.doc=getDocHTML(); saveDocDebounced(); }
 $('#boldBtn').onclick=()=>cmd('bold'); $('#italicBtn').onclick=()=>cmd('italic'); $('#underBtn').onclick=()=>cmd('underline');
 
-/* Refrescar (borra también filiaciones) */
-function refreshAll(){ renderFiliaciones(); renderColetillas(); }
-$('#refreshTopBtn').onclick=()=>{ if(confirm("Esto refrescará y borrará TODAS las filiaciones. ¿Continuar?")){ state.filiaciones=[]; openedIndex=-1; save(); refreshAll(); $('#emptyHint').style.display='block'; } };
-
-/* Coletillas (modal) */
-function renderColetillas(){
-  const cont=$("#coletillasList"); cont.innerHTML="";
-  COLETILLAS.forEach(c=>{
-    const el=document.createElement('div'); el.className="coletilla";
-    el.innerHTML = `<div class="label">${c.label}</div>
-                    <div><button class="btn secondary tiny">➜ Insertar</button></div>`;
-    el.querySelector('button').onclick=()=>{ 
-      editorFocus(); document.execCommand('insertText', false, c.text);
-      state.doc = $('#doc').innerHTML; saveDocDebounced();
-      closeColetillas(); editorFocus();
-    };
-    cont.appendChild(el);
-  });
+/* Refresco = borrar todo y comenzar nuevo + arranque vacío */
+function wipeAllAndRender(){
+  state.filiaciones = [];
+  state.titulo = "";
+  state.doc = "";
+  state.nextId = 1;
+  openedIndex = -1;
+  try { localStorage.removeItem(LS_KEY); } catch {}
+  $('#titulo').value = "";
+  setDocHTML("");
+  savedRange = null;
+  renderFiliaciones(); renderColetillas();
+  $('#emptyHint').style.display = 'block';
 }
-function openColetillas(){ $('#coletillasModal').classList.add('show'); $('#coletillasModal').setAttribute('aria-hidden','false'); renderColetillas(); }
-function closeColetillas(){ $('#coletillasModal').classList.remove('show'); $('#coletillasModal').setAttribute('aria-hidden','true'); refreshAll(); }
+$('#refreshTopBtn').onclick = () => wipeAllAndRender();
+
 $('#openColetillasBtn').onclick=openColetillas;
 $('#closeColetillasBtn').onclick=closeColetillas;
 $('#coletillasModal').addEventListener('click', e=>{ if(e.target.id==='coletillasModal'){ closeColetillas(); } });
@@ -737,17 +678,21 @@ $('#importXlsxBtn').onclick=()=>$('#importXlsxInput').click();
 $('#importXlsxInput').addEventListener('change', async (e)=>{ const files=e.target.files; if(!files?.length) return; await importXlsxFiles(files); e.target.value=""; });
 
 /* Añadir ficha nueva */
-$('#addFBtn').onclick=()=>{ state.filiaciones.push(nuevaFiliacion()); save(); openedIndex = state.filiaciones.length-1; renderFiliaciones(); };
+$('#addFBtn').onclick=()=>{ const f=nuevaFiliacion(); state.filiaciones.push(f); state.nextId++; save(); openedIndex = state.filiaciones.length-1; renderFiliaciones(); };
 
-/* Export ODT con Ctrl/Cmd + 1 */
-window.addEventListener('keydown', (e)=>{ if((e.ctrlKey||e.metaKey) && e.key === '1'){ e.preventDefault(); exportODT(); } });
-
-/* Init */
+/* Init — SIEMPRE arrancar en blanco (móvil) */
 (function init(){
-  load();
-  $('#titulo').value=state.titulo||"";
-  setDocHTML(state.doc||"");
+  try { localStorage.removeItem(LS_KEY); } catch {}
+  state.filiaciones = [];
+  state.titulo = "";
+  state.doc = "";
+  state.nextId = 1;
   openedIndex = -1;
-  renderFiliaciones();
-  $('#emptyHint').style.display = state.filiaciones.length ? 'none':'block';
+
+  $('#titulo').value = "";
+  setDocHTML("");
+  savedRange = null;
+
+  renderFiliaciones(); renderColetillas();
+  $('#emptyHint').style.display = 'block';
 })();
