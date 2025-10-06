@@ -9,6 +9,7 @@
     --bg:#0a1630; --bg2:#0e224a; --panel:#0f1d44; --panel-2:#0b1a3a;
     --text:#eff3ff; --muted:#a5b3d9; --border:#203463;
     --accent:#2c6dfc; --accent-2:#45e0ff; --tape:#ffd34d; --danger:#e05b5b; --red:#ff0a0a;
+    --success:#29a36a;
     --radius:16px; --shadow:0 12px 35px rgba(0,0,0,.35);
   }
   *{box-sizing:border-box}
@@ -54,7 +55,7 @@
   }
 
   .editor{
-    width:100%; min-height:70vh; line-height:1.6; outline:none; border:1px solid var(--border);
+    width:100%; min-height:70vh; line-height:1.7; outline:none; border:1px solid var(--border);
     border-radius:10px; padding:14px; background:#0b1433; overflow:auto; white-space:pre-wrap;
   }
 
@@ -65,37 +66,43 @@
   .btn.secondary{background:linear-gradient(180deg, #10224d, #0f224e); color:var(--text); border:1px solid var(--border); box-shadow:none}
   .btn.ghost{background:transparent; color:var(--muted); border:1px dashed var(--border); box-shadow:none}
   .btn.danger{background:linear-gradient(180deg, #cf4f4f, #a83e3e); box-shadow:0 6px 16px rgba(224,91,91,.25)}
+  .btn.success{background:linear-gradient(180deg, var(--success), #1f7d51); box-shadow:0 6px 16px rgba(41,163,106,.25)}
   .btn.tiny{font-size:13px; padding:7px 10px; border-radius:9px; min-height:auto}
   .btn-row{display:flex; gap:8px; flex-wrap:wrap}
 
-  details{background:#0c1640; border:1px solid var(--border); border-radius:12px; margin-bottom:10px; overflow:hidden;}
-  summary{list-style:none; position:relative; padding:12px 44px 12px 12px; cursor:pointer; user-select:none; display:flex; align-items:center; gap:10px; min-height:48px;}
-  summary::-webkit-details-marker{display:none}
-  .tag{font-size:12px; color:#08122a; background:linear-gradient(180deg, var(--accent-2), #1c8ba5); padding:4px 8px; border-radius:999px; font-weight:900; border:1px solid rgba(8,18,42,.3)}
-  .title{font-weight:800}
-  .sub{font-size:12px; color:#b6c5ff}
-  .caret{position:absolute; right:12px; top:50%; transform:translateY(-50%) rotate(0deg); width:18px; height:18px; border:solid #7fb7ff; border-width:0 2px 2px 0; display:inline-block; padding:3px; transform-origin:center; transition:transform .2s ease;}
-  details[open] summary .caret{transform:translateY(-50%) rotate(45deg)}
-  .details-body{padding:10px; border-top:1px solid var(--border); background:linear-gradient(180deg,#0b1537,#0a1333)}
-
-  /* Modal Coletillas */
-  .modal{position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; z-index:50}
-  .modal.show{display:flex}
-  .modal .panel{width:min(720px,94vw); max-height:85vh; overflow:auto; background:linear-gradient(180deg, #101a44, #0c1433);
-    border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow)}
-  .modal .panel .head{display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid var(--border)}
-  .modal .panel .body{padding:12px}
-  .coletillas{display:flex; flex-direction:column; gap:8px}
-  .coletilla{display:flex; align-items:center; justify-content:space-between; gap:8px; background:#0b1536; border:1px solid var(--border); border-radius:10px; padding:10px}
-  .coletilla .label{font-size:14px; font-weight:700; color:#d7dcef}
-
-  /* Botonera superior del documento: 2x2 en móvil, 4 columnas en >=600px */
-  .btn-grid{display:grid; grid-template-columns: repeat(2, 1fr); gap:8px; align-items:stretch}
-  @media (min-width:600px){ .btn-grid{ grid-template-columns: repeat(4, 1fr); } }
+  .btn-grid{
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap:8px;
+    align-items:stretch;
+  }
   .btn-grid .btn{width:100%}
 
-  .fmtbar{display:flex; gap:6px; margin:6px 0 8px; justify-content:flex-end}
-  .fmtbar button{min-height:auto; padding:6px 8px; border-radius:8px}
+  .fmtbar{
+    display:flex;
+    gap:6px;
+    margin:6px 0 8px;
+    justify-content:flex-end;
+    flex-wrap:wrap;
+  }
+  .fmtbar button{
+    min-height:auto;
+    padding:6px 8px;
+    border-radius:8px;
+  }
+
+  details{background:#0c1640; border:1px solid var(--border); border-radius:12px; margin-bottom:10px; overflow:hidden;}
+  summary{list-style:none; position:relative; padding:10px 44px 10px 10px; cursor:pointer; user-select:none; display:flex; align-items:center; gap:10px; min-height:40px;}
+  summary::-webkit-details-marker{display:none}
+  .tag{font-size:12px; color:#08122a; background:linear-gradient(180deg, var(--accent-2), #1c8ba5); padding:3px 8px; border-radius:999px; font-weight:900; border:1px solid rgba(8,18,42,.3)}
+  .title{font-weight:800}
+  .sub{font-size:12px; color:#b6c5ff}
+  .summary-right{margin-left:auto; display:flex; align-items:center; gap:8px}
+  .docmeta{font-size:12px; color:#b6c5ff; white-space:nowrap}
+  .caret{margin-left:6px; width:14px; height:14px; border:solid #7fb7ff; border-width:0 2px 2px 0; display:inline-block; padding:3px; transform:rotate(0deg); transition:transform .2s ease;}
+  details[open] summary .caret{transform:rotate(45deg)}
+  .details-body{padding:10px; border-top:1px solid var(--border); background:linear-gradient(180deg,#0b1537,#0a1333)}
+
   .req{color:#ffb3b3}
 </style>
 </head>
@@ -104,40 +111,26 @@
   <div class="tapebar"></div>
   <div class="header-inner">
     <div class="badge">COMPA • POL</div>
-    <div class="title">GESTOR DE PARTES Y COMPARECENCIAS</div>
-    <div class="refresh-top"><button id="refreshTopBtn" title="Refrescar (borra filiaciones)">🔃</button></div>
+    <div class="title">GESTOR DE PARTES Y COMPARECENCIAS — Móvil</div>
+    <div class="refresh-top"><button id="refreshTopBtn" title="Comenzar nuevo (borra todo)">🔄</button></div>
   </div>
 </header>
 
 <div class="wrap">
 
-  <!-- Panel: Documento (arriba en móvil) -->
+  <!-- Panel: Documento (botones arriba) -->
   <section class="card" id="panel-documento">
     <div class="head">
       <div class="btn-grid">
-       
         <button class="btn secondary" id="saveProjectBtn">💼 Guardar proyecto</button>
         <input type="file" id="loadProjectInput" accept="application/json" style="display:none" />
         <button class="btn secondary" id="loadProjectBtn">📂 Cargar proyecto</button>
         <button class="btn secondary" id="printBtn">🖨️ Imprimir / PDF</button>
-        <button class="btn secondary" id="openColetillasBtn">🧩 Coletillas</button>
       </div>
-    </div>
-    <div class="body">
-      <label for="titulo">Título</label>
-      <input id="titulo" />
-      <div class="fmtbar">
-        <button class="btn secondary tiny" id="boldBtn" title="Negrita"><strong>B</strong></button>
-        <button class="btn secondary tiny" id="italicBtn" title="Cursiva"><em>I</em></button>
-        <button class="btn secondary tiny" id="underBtn" title="Subrayado"><span style="text-decoration:underline">U</span></button>
-      </div>
-      <label for="doc">Contenido</label>
-      <div id="doc" class="editor" contenteditable="true"></div>
-      <p class="tiny muted">Atajos: <strong>Ctrl/Cmd + 1</strong> exporta ODT, <strong>Ctrl/Cmd + B/I/U</strong> formato, <strong>Enter</strong> comienza con <code>-- </code>.</p>
     </div>
   </section>
 
-  <!-- Panel: Filiaciones -->
+  <!-- Filiaciones (entre botones y título) -->
   <section class="card" id="panel-filiaciones">
     <div class="head"><h2>Filiaciones</h2></div>
     <div class="body">
@@ -148,6 +141,23 @@
       </div>
       <div id="filiaciones"></div>
       <p id="emptyHint" class="muted tiny" style="display:none">No hay filiaciones. Importa un XLSX o pulsa “Añadir filiación”.</p>
+    </div>
+  </section>
+
+  <!-- Continuación del documento: título + editor -->
+  <section class="card">
+    <div class="body">
+      <label for="titulo">Título</label>
+      <input id="titulo" />
+      <div class="fmtbar">
+        <button class="btn secondary tiny" id="boldBtn" title="Negrita"><strong>B</strong></button>
+        <button class="btn secondary tiny" id="italicBtn" title="Cursiva"><em>I</em></button>
+        <button class="btn secondary tiny" id="underBtn" title="Subrayado"><span style="text-decoration:underline">U</span></button>
+        <button class="btn secondary tiny" id="openColetillasBtn" title="Coletillas">🧩</button>
+      </div>
+      <label for="doc">Contenido</label>
+      <div id="doc" class="editor" contenteditable="true"></div>
+      <p class="tiny muted">Atajos: <strong>fN / FN</strong> inserta filiación N, <strong>ccc</strong> abre Coletillas.</p>
     </div>
   </section>
 
@@ -166,7 +176,6 @@
   </div>
 </div>
 
-<!-- ⬇⬇⬇  AQUÍ ESTABA EL FALLO: apuntaba a app_mobile.js  ⬇⬇⬇ -->
-<script defer src="app.js"></script>
+<script defer src="app_mobile.js"></script>
 </body>
 </html>
