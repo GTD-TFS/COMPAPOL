@@ -1,16 +1,27 @@
-// ============ CORE: utilidades, estado, normalizadores, ZIP/ODT/XLSX ============
+// ============ CORE: utilidades, estado, normalizadores, ZIP/ODT/XLSX, editor, helpers ============
 
 (function(){
+  // ----- Query helpers -----
   const $ = s=>document.querySelector(s);
 
   // ----- Estado -----
   const LS_KEY = "gestor_partes_comparecencias_mobile_v3";
   const state = { filiaciones:[], titulo:"", doc:"", nextId:1 };
-  let openedIndex = -1;
 
   function save(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch{} }
   function hardResetStorage(){ try{ localStorage.removeItem(LS_KEY); }catch{} }
-  function load(){ try{ Object.assign(state, JSON.parse(localStorage.getItem(LS_KEY)||"{}")); }catch{} }
+  function load(){ try{
+    const parsed = JSON.parse(localStorage.getItem(LS_KEY)||"{}");
+    if(parsed && typeof parsed==='object'){
+      // merge conservando nextId coherente
+      Object.assign(state, parsed);
+      if(!Array.isArray(state.filiaciones)) state.filiaciones = [];
+      if(typeof state.nextId!=='number' || !isFinite(state.nextId)){
+        const maxId = Math.max(0, ...state.filiaciones.map(ff=>ff?.fixedId||0));
+        state.nextId = (maxId>0?maxId:0) + 1;
+      }
+    }
+  }catch{} }
 
   // ----- Utils -----
   function debounce(fn, wait=800){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), wait); }; }
@@ -97,10 +108,11 @@
   const normDomicilio = s => titleCaseEs(s);
   const normLugarNac = s => titleCaseEs(s);
 
+  // Excel serial date -> dd/mm/yyyy
   function excelSerialToDMYString(n){
     const num = Number(n);
     if(!isFinite(num)) return "";
-    const base = new Date(Date.UTC(1899,11,30));
+    const base = new Date(Date.UTC(1899,11,30)); // Excel 1900 bug
     const ms = num * 86400000;
     const d = new Date(base.getTime()+ms);
     const dd = String(d.getUTCDate()).padStart(2,'0');
@@ -111,10 +123,12 @@
   }
 
   function normalizeFiliacion(f){
+    f = Object.assign({
+      nombre:"", apellidos:"", tipoSel:"", otroDoc:"", tipoDoc:"", dni:"", padres:"",
+      domicilio:"", telefono:"", fechaNac:"", lugarNac:"", condSel:"", condOtro:""
+    }, f||{});
     f.nombre    = normNombre(f.nombre);
     f.apellidos = normApellidos(f.apellidos);
-    f.tipoSel   = f.tipoSel || "";
-    f.otroDoc   = f.otroDoc || "";
     if(f.tipoSel==="Indocumentado" || f.tipoSel==="Indocumentada") f.tipoSel="Indocumentado/a";
     f.tipoDoc   = mapIndocumentadoAny(normTipoDocLabel(f.tipoSel, f.otroDoc));
     f.dni       = normNumDoc(f.dni);
@@ -132,7 +146,106 @@
     domicilio:"", telefono:"", fechaNac:"", lugarNac:"", condSel:"", condOtro:"", fixedId: state.nextId
   }); }
 
-  // ----- ZIP/ODT/XLSX -----
+  // ----- Coletillas por defecto -----
+  const COLETILLAS = [
+    { label:"Info derechos", text:"Resulta conveniente hacer constar que se ha informado a las partes de sus derechos y obligaciones." },
+    { label:"Advertencia plazo", text:"Se advierte a la persona interesada de que la falta de respuesta en el plazo conferido podrá entenderse como desistimiento." },
+    { label:"Unión de escrito", text:"Queda unido a las actuaciones el escrito presentado, dándose por reproducido su contenido a los efectos oportunos." },
+    { label:"Notificación y recursos", text:"Notifíquese a las partes personadas, con indicación de los recursos que procedan." }
+  ];
+
+  // ----- Editor + selección -----
+  function editorEl(){ return $('#doc'); }
+  function editorFocus(){ editorEl()?.focus(); }
+  function getDocHTML(){ return editorEl()?.innerHTML || ""; }
+  function setDocHTML(html){ if(editorEl()) editorEl().innerHTML = html||""; }
+
+  let _savedSel = null;
+  function saveEditorSelection(){
+    const sel = window.getSelection();
+    if(!sel || !sel.rangeCount) return;
+    _savedSel = sel.getRangeAt(0).cloneRange();
+  }
+  function restoreEditorSelection(){
+    if(!_savedSel) return false;
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(_savedSel);
+    return true;
+  }
+  function insertHTMLAtCursor(html){
+    const ed = editorEl();
+    if(!ed) return;
+    if(!restoreEditorSelection()){
+      const r = document.createRange();
+      r.selectNodeContents(ed);
+      r.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    document.execCommand('insertHTML', false, html);
+    saveEditorSelection();
+  }
+
+  // ----- Helpers de filiaciones -----
+  function getTipoDocShown(f){
+    return f.tipoSel==="Otro" ? (f.otroDoc?f.otroDoc:f.tipoDoc) : f.tipoSel || f.tipoDoc || "";
+  }
+  function isCondValid(f){ return f.condSel && (f.condSel!=="Otro" || (f.condOtro && f.condOtro.trim()!=="")); }
+
+  function buildColetillaFromFiliacion(f){
+    const segs=[];
+    const nom=[f.nombre,f.apellidos].filter(Boolean).join(' ').trim(); if(nom) segs.push(nom);
+
+    const tdoc = getTipoDocShown(f);
+    const isIndoc = /^Indocumentad[oa]\/?a?$/.test(tdoc||"") || (tdoc==="Indocumentado/a");
+    if(isIndoc){ segs.push("Indocumentado/a"); }
+    else{
+      if(tdoc && f.dni){ segs.push(`con ${tdoc} número ${f.dni}`); }
+      else if(tdoc){ segs.push(`con ${tdoc}`); }
+      else if(f.dni){ segs.push(`con número ${f.dni}`); }
+    }
+
+    if(f.lugarNac || f.fechaNac){
+      let born = "nacido/a";
+      if(f.lugarNac) born += ` en ${f.lugarNac}`;
+      if(f.fechaNac) born += ` el día ${f.fechaNac}`;
+      segs.push(born);
+    }
+
+    if(f.padres){ segs.push(`hijo/a de ${f.padres}`); }
+    if(f.domicilio){ segs.push(`con domicilio en ${f.domicilio}`); }
+    if(f.telefono){ segs.push(`teléfono ${f.telefono}`); }
+
+    return segs.join(", ");
+  }
+
+  function includeFiliacionById(id){
+    const f = state.filiaciones.find(x=>x.fixedId===id);
+    if(!f){ alert(`No existe la filiación #${id}.`); return; }
+    if(!isCondValid(f)){ alert(`Falta rellenar la condición en la filiación #${id}.`); return; }
+    const txt = buildColetillaFromFiliacion(f);
+    editorFocus();
+    insertHTMLAtCursor(`<b>${escapeHtml(txt)}</b>`);
+    state.doc = getDocHTML();
+    saveDocDebounced();
+    editorFocus();
+  }
+
+  function wipeAllAndRender(){
+    state.filiaciones = [];
+    state.titulo = "";
+    state.doc = "";
+    state.nextId = 1;
+    try{ localStorage.removeItem(LS_KEY); }catch{}
+    $('#titulo') && ($('#titulo').value="");
+    setDocHTML("");
+    save();
+    if(window.UI?.renderFiliaciones) window.UI.renderFiliaciones();
+  }
+
+  // ----- ZIP Writer + XLSX -----
   function crc32(u8){ let c=~0>>>0; for(let i=0;i<u8.length;i++){ c=(c>>>8)^CRC_TABLE[(c^u8[i])&0xFF]; } return (~c)>>>0; }
   const CRC_TABLE=(()=>{const t=new Uint32Array(256); for(let n=0;n<256;n++){let c=n; for(let k=0;k<8;k++){ c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);} t[n]=c>>>0;} return t;})();
   function dosDateTime(d=new Date()){ const time=((d.getHours()<<11)|(d.getMinutes()<<5)|(Math.floor(d.getSeconds()/2)))&0xFFFF; const date=(((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate())&0xFFFF; return {time,date}; }
@@ -174,6 +287,7 @@
     }
   }
 
+  // ----- ODT (preserva B/I/U) -----
   function htmlToODTParagraphs(html){
     const tmp=document.createElement('div'); tmp.innerHTML = stripHTMLExceptBIU(html||"");
     const out=[];
@@ -236,6 +350,7 @@
     return z.finalize();
   }
 
+  // ----- XLSX (plantilla “Resumen”) -----
   const XLSX_LABELS = [
     "Nombre","Apellidos","Tipo de documento","Nº Documento","Sexo","Nacionalidad","Nombre de los Padres",
     "Fecha de nacimiento","Lugar de nacimiento","Domicilio","Teléfono","Delito","C.P. Agentes","Diligencias",
@@ -354,14 +469,40 @@
   }
 
   // ----- Export API -----
+  const openedIndexRef = { get value(){ return -1; }, set value(_v){} }; // reservado, por compat.
+
   window.Core = {
+    // estado & storage
     $, LS_KEY, state, save, load, hardResetStorage,
     saveDebounced, saveDocDebounced,
+
+    // utils
     toUTF8, fromUTF8, todayISO, escapeXml, escapeHtml, stripHTMLExceptBIU, download,
+
+    // normalizadores
     titleCaseEs, mapIndocumentadoAny, normTipoDocLabel, excelSerialToDMYString,
     normNumDoc, normNombre, normApellidos, normPadres, normDomicilio, normLugarNac,
-    normalizeFiliacion, nuevaFiliacion,
+
+    // filiaciones
+    normalizeFiliacion, nuevaFiliacion, getTipoDocShown, isCondValid,
+    buildColetillaFromFiliacion, includeFiliacionById,
+
+    // editor
+    editorEl, editorFocus, getDocHTML, setDocHTML,
+    saveEditorSelection, restoreEditorSelection, insertHTMLAtCursor,
+
+    // formatos
     ZipWriter, makeXLSXFromFiliacion, fileBaseFromTitle, fileNameForFiliacion,
-    openedIndexRef: { get value(){ return openedIndex; }, set value(v){ openedIndex=v; } }
+    makeODTFromHTML,
+
+    // otros
+    COLETILLAS, openedIndexRef, wipeAllAndRender
   };
+
+  // Exponemos helpers básicos globalmente por comodidad en otros módulos
+  window.$ = window.Core.$;
+  window.$$ = (s)=>Array.from(document.querySelectorAll(s));
+
+  // Cargar estado al inicio
+  load();
 })();
