@@ -1,15 +1,17 @@
 // ============ IO: import/export (XLSX, JSON, proyecto), ZIP reader ============
 
 (function(){
-  const { $, state, save, fromUTF8, toUTF8, escapeHtml,
-          normalizeFiliacion, mapIndocumentadoAny, normTipoDocLabel, excelSerialToDMYString,
-          makeXLSXFromFiliacion, download, fileBaseFromTitle, fileNameForFiliacion, openedIndexRef } = window.Core;
+  const { $, state, save, normalizeFiliacion,
+          mapIndocumentadoAny, normTipoDocLabel, excelSerialToDMYString,
+          makeXLSXFromFiliacion, download, fileBaseFromTitle, fileNameForFiliacion,
+          toUTF8 } = window.Core;
 
-  // ZIP reader con fallback deflate/deflate-raw
+  // --------- ZIP Reader (deflate / deflate-raw con fallback) ----------
   class ZipReader{
     constructor(u8){ this.u8=u8; this.dv=new DataView(u8.buffer); }
     async readText(path){ const data=await this.readFile(path); return new TextDecoder().decode(data); }
     async exists(path){ try{ await this.readFile(path); return true; }catch{ return false; } }
+
     async inflateRawOrZlib(comp){
       if(typeof DecompressionStream === 'undefined'){
         throw new Error("Este navegador no soporta descompresión ZIP (DecompressionStream).");
@@ -24,6 +26,7 @@
         return new Uint8Array(ab);
       }
     }
+
     async readFile(path){
       const eocd=this.findEOCD(); if(!eocd) throw new Error("EOCD no encontrado");
       const cdOff=eocd.cdOffset, cdSize=eocd.cdSize; const cdEnd=cdOff+cdSize;
@@ -54,6 +57,7 @@
       }
       throw new Error("Archivo no encontrado en ZIP: "+path);
     }
+
     findEOCD(){
       const u8=this.u8; const start=Math.max(0,u8.length-0xFFFF);
       for(let i=u8.length-22;i>=start;i--){
@@ -66,7 +70,6 @@
       return null;
     }
   }
-  window.IO = { ZipReader }; // expuesto por si hiciera falta
 
   // -------- Import XLSX --------
   async function importXlsxFiles(fileList){
@@ -86,19 +89,26 @@
         let target=rel?.getAttribute("Target")||"worksheets/sheet1.xml";
         if(!target.startsWith("worksheets/")) target="worksheets/sheet1.xml";
         const sheetXml=await zip.readText("xl/"+target);
+
         let shared=[];
         if(await zip.exists("xl/sharedStrings.xml")){
           const sXml=await zip.readText("xl/sharedStrings.xml");
           const sDoc=new DOMParser().parseFromString(sXml,"application/xml");
           shared=Array.from(sDoc.getElementsByTagName("si")).map(si=>Array.from(si.getElementsByTagName("t")).map(t=>t.textContent||"").join(""));
         }
+
         const ws=new DOMParser().parseFromString(sheetXml,"application/xml");
         const cells=Array.from(ws.getElementsByTagName("c"));
         const byRow={};
+
         function readCell(c){
           const t=c.getAttribute("t"); const v=c.getElementsByTagName("v")[0];
           if(t==="s"){ const idx=v?parseInt(v.textContent||"0",10):0; return shared[idx]??""; }
-          if(t==="inlineStr"){ const is=c.getElementsByTagName("is")[0]; const tnode=is?.getElementsByTagName("t")[0]; return tnode?tnode.textContent||"" : ""; }
+          if(t==="inlineStr"){
+            const is=c.getElementsByTagName("is")[0];
+            const tnode=is?.getElementsByTagName("t")[0];
+            return tnode?tnode.textContent||"" : "";
+          }
           const val = v? v.textContent||"" : "";
           if(/^\d+(\.\d+)?$/.test(val)){
             const asDate = excelSerialToDMYString(val);
@@ -106,17 +116,20 @@
           }
           return val;
         }
+
         cells.forEach(c=>{
           const ref=c.getAttribute("r")||""; const m=ref.match(/^([A-Z]+)(\d+)$/); if(!m) return;
           const col=m[1]; const row=parseInt(m[2],10); const val=readCell(c);
           byRow[row]=byRow[row]||{}; if(col==="A") byRow[row].A=val; else if(col==="B") byRow[row].B=val;
         });
+
         const map={}; Object.values(byRow).forEach(r=>{ if(r?.A) map[r.A.trim()]=(r.B||"").trim(); });
 
         let tipoRaw = map["Tipo de documento"] || "";
         tipoRaw = mapIndocumentadoAny(tipoRaw);
-        const tipoSel = (["DNI","NIE","PASAPORTE"].includes((tipoRaw||"").toUpperCase())) ? (tipoRaw.toUpperCase()==="PASAPORTE"?"Pasaporte":tipoRaw.toUpperCase())
-                      : (tipoRaw==="Indocumentado/a" ? "Indocumentado/a" : (tipoRaw ? "Otro" : ""));
+        const tipoSel = (["DNI","NIE","PASAPORTE"].includes((tipoRaw||"").toUpperCase()))
+          ? (tipoRaw.toUpperCase()==="PASAPORTE" ? "Pasaporte" : tipoRaw.toUpperCase())
+          : (tipoRaw==="Indocumentado/a" ? "Indocumentado/a" : (tipoRaw ? "Otro" : ""));
 
         const f = normalizeFiliacion({
           nombre    : map["Nombre"] || "",
@@ -130,18 +143,19 @@
           padres    : map["Nombre de los Padres"] || "",
           domicilio : map["Domicilio"] || "",
           telefono  : map["Teléfono"] || "",
-          condSel   : "", condOtro: "",
-          fixedId   : state.nextId
+          condSel   : "", condOtro: ""
         });
 
         state.filiaciones.push(f);
-        state.nextId++;
         lastIdx = state.filiaciones.length-1;
       }catch(err){
         alert(`No se pudo importar “${file.name}”: ${err.message}`);
       }
     }
-    if(lastIdx>=0){ save(); openedIndexRef.value = lastIdx; window.UI.renderFiliaciones(); }
+    if(lastIdx>=0){
+      save();
+      window.UI?.renderFiliaciones?.();
+    }
   }
 
   // -------- Import JSON --------
@@ -151,21 +165,18 @@
         const data = JSON.parse(await file.text());
         const list = Array.isArray(data) ? data : [data];
         for(const raw of list){
-          const f = normalizeFiliacion({
-            ...raw,
-            fixedId: state.nextId
-          });
+          const f = normalizeFiliacion(raw);
           state.filiaciones.push(f);
-          state.nextId++;
         }
       }catch(err){
         alert(`No se pudo importar “${file.name}”: ${err.message}`);
       }
     }
-    save(); window.UI.renderFiliaciones();
+    save();
+    window.UI?.renderFiliaciones?.();
   }
 
-  // -------- Export / Proyecto --------
+  // -------- Exportaciones de una ficha --------
   function exportFiliacionXlsxByIndex(i){
     const f = state.filiaciones[i];
     const xlsx = makeXLSXFromFiliacion(f);
@@ -174,59 +185,80 @@
   function exportFiliacionJsonByIndex(i){
     const f = state.filiaciones[i];
     const pretty = JSON.stringify(f, null, 2);
-    download(`filiacion_${f.fixedId}.json`, toUTF8(pretty), "application/json");
+    download(`filiacion_${f.fixedId||i+1}.json`, toUTF8(pretty), "application/json");
   }
+
+  // -------- Guardar/Cargar proyecto --------
   function saveProject(){
     const base=fileBaseFromTitle();
-    const json=toUTF8(JSON.stringify({...state, doc: window.UI.getDocHTML()}, null, 2));
+    const json=toUTF8(JSON.stringify({...state, doc: window.Core.getDocHTML()}, null, 2));
     download(`${base}.json`, json, "application/json");
   }
   async function loadProjectFromFile(file){
     const data=JSON.parse(await file.text());
     if(!data || !Array.isArray(data.filiaciones)) throw new Error("Formato inválido");
+    // recomponer nextId si falta o no es válido
     if(typeof data.nextId !== 'number' || !isFinite(data.nextId)){
       const maxId = Math.max(0, ...data.filiaciones.map(ff=>ff.fixedId||0));
       data.nextId = maxId + 1;
     }
-    state.filiaciones=data.filiaciones.map(ff=>normalizeFiliacion(Object.assign({tipoSel:"", otroDoc:"", condSel:"", condOtro:""}, ff)));
-    state.titulo=data.titulo||""; state.doc=data.doc||""; state.nextId = data.nextId||state.nextId;
+    state.filiaciones = data.filiaciones.map(ff=>normalizeFiliacion(Object.assign({tipoSel:"", otroDoc:"", condSel:"", condOtro:""}, ff)));
+    state.titulo = data.titulo || "";
+    state.doc    = data.doc || "";
+    state.nextId = data.nextId;
+    save();
   }
 
-  // -------- Export ODT --------
+  // -------- Export ODT (si lo usas con algún botón) --------
   function exportODT(){
     const base=fileBaseFromTitle(); const title=state.titulo||"Documento";
-    const html = window.UI.getDocHTML(); const odt=window.UI.makeODTFromHTML(title, html);
+    const html = window.Core.getDocHTML(); const odt=window.Core.makeODTFromHTML(title, html);
     download(`${base}.odt`, odt, "application/vnd.oasis.opendocument.text");
   }
 
   // Exponer IO
   window.IO = {
-    ...window.IO,
     importXlsxFiles, importJsonFiles,
     exportFiliacionXlsxByIndex, exportFiliacionJsonByIndex,
     saveProject, loadProjectFromFile, exportODT
   };
 
-  // Wire botones de archivos que están en HTML
+  // Wire de botones existentes en HTML (móvil)
   window.addEventListener('DOMContentLoaded', ()=>{
+    // Import XLSX
     $('#importXlsxBtn')?.addEventListener('click', ()=>$('#importXlsxInput').click());
-    $('#importXlsxInput')?.addEventListener('change', async (e)=>{ const files=e.target.files; if(!files?.length) return; await importXlsxFiles(files); e.target.value=""; });
+    $('#importXlsxInput')?.addEventListener('change', async (e)=>{
+      const files=e.target.files; if(!files?.length) return;
+      await importXlsxFiles(files);
+      e.target.value="";
+    });
 
+    // Import JSON
     $('#importJsonBtn')?.addEventListener('click', ()=>$('#importJsonInput').click());
-    $('#importJsonInput')?.addEventListener('change', async (e)=>{ const files=e.target.files; if(!files?.length) return; await importJsonFiles(files); e.target.value=""; });
+    $('#importJsonInput')?.addEventListener('change', async (e)=>{
+      const files=e.target.files; if(!files?.length) return;
+      await importJsonFiles(files);
+      e.target.value="";
+    });
 
+    // Guardar/Cargar proyecto
     $('#saveProjectBtn')?.addEventListener('click', ()=> saveProject());
     $('#loadProjectBtn')?.addEventListener('click', ()=> $('#loadProjectInput').click());
     $('#loadProjectInput')?.addEventListener('change', async (e)=>{
       const file=e.target.files?.[0]; if(!file) return;
       try{
         await loadProjectFromFile(file);
-        window.UI.afterProjectLoaded(); // refresca UI
+        window.UI?.afterProjectLoaded?.();
         alert("Proyecto cargado correctamente.");
-      }catch(err){ alert("No se pudo cargar el proyecto: " + err.message); }
-      finally{ e.target.value=""; }
+      }catch(err){
+        alert("No se pudo cargar el proyecto: " + err.message);
+      }finally{
+        e.target.value="";
+      }
     });
 
+    // Imprimir
     $('#printBtn')?.addEventListener('click', ()=>window.print());
   });
+
 })();
