@@ -94,6 +94,10 @@
   filter: brightness(1.2);
   box-shadow: 0 0 0 2px rgba(255,255,255,.12) inset;
 }
+  .modal{ position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; z-index:9999; }
+.modal.show{ display:flex; }
+.fmtbar .active{ filter:brightness(1.2); box-shadow:0 0 0 2px rgba(255,255,255,.12) inset; }
+
   details{background:#0c1640; border:1px solid var(--border); border-radius:12px; margin-bottom:10px; overflow:hidden;}
   summary{list-style:none; position:relative; padding:10px 44px 10px 10px; cursor:pointer; user-select:none; display:flex; align-items:center; gap:10px; min-height:40px;}
   summary::-webkit-details-marker{display:none}
@@ -138,10 +142,13 @@
     <div class="head"><h2>Filiaciones</h2></div>
     <div class="body">
       <div class="btn-row" style="margin-bottom:10px">
-        <button class="btn" id="addFBtn">➕ Añadir filiación</button>
-        <button class="btn secondary" id="importXlsxBtn">📥 Importar XLSX</button>
-        <input id="importXlsxInput" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple style="display:none" />
-      </div>
+  <button class="btn" id="addFBtn">➕ Añadir filiación</button>
+  <button class="btn secondary" id="importXlsxBtn">📥 Importar XLSX</button>
+  <input id="importXlsxInput" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple style="display:none" />
+  <button class="btn secondary" id="importJsonBtn">📥 Importar JSON</button>
+  <input id="importJsonInput" type="file" accept="application/json" multiple style="display:none" />
+</div>
+
       <div id="filiaciones"></div>
       <p id="emptyHint" class="muted tiny" style="display:none">No hay filiaciones. Importa un XLSX o pulsa “Añadir filiación”.</p>
     </div>
@@ -185,5 +192,6 @@
 
 </body>
 </html>
+
 
 
